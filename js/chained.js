@@ -149,7 +149,8 @@ function parseImportNames(raw) {
   const symbolsOffset = dv.getUint32(12, true);
   const count = dv.getUint32(16, true);
   const format = dv.getUint32(20, true);
-  if (version !== 0 || count > MAX_CHAINED_IMPORTS || startsOffset >= raw.length ||
+  const symbolsFormat = dv.getUint32(24, true);
+  if (version !== 0 || symbolsFormat !== 0 || count > MAX_CHAINED_IMPORTS || startsOffset >= raw.length ||
       importsOffset >= raw.length || symbolsOffset >= raw.length) return null;
 
   const stride = format === 1 ? 4 : format === 2 ? 8 : format === 3 ? 16 : 0;
