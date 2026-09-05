@@ -1,4 +1,5 @@
 import { architectureCapability } from '../architecture/index.js';
+import { sectionHasMappedAddress } from '../binary/audit.js';
 import { DEPLOYED_CAPSTONE_SUPPORT } from './capstone-capability.js';
 import { supportDisplayForTruth, supportTruthForImage } from './support-capability.js';
 
@@ -23,7 +24,7 @@ function regionFrom(item, id, kind) {
     vmAddr: BigInt(item.address ?? 0),
     size: fileSize,
     declaredSize,
-    exec: !!item.perms?.execute,
+    exec: !!item.perms?.execute && (kind !== 'section' || sectionHasMappedAddress(item)),
     write: !!item.perms?.write,
     read: !!item.perms?.read,
     zerofill: fileSize === 0n && declaredSize > 0n,
@@ -35,9 +36,86 @@ function regionFrom(item, id, kind) {
 export function regionsForImage(image, prefix = 'p0_') {
   const sections = image.sections || [];
   const usefulSections = sections.filter((s) => BigInt(s.fileSize ?? s.size ?? 0) > 0n || BigInt(s.size ?? 0n) > 0n);
-  const source = usefulSections.length ? usefulSections : (image.segments || []);
-  const kind = usefulSections.length ? 'section' : 'segment';
-  return source.map((item, index) => regionFrom(item, `${prefix}${kind[0]}${index}`, kind));
+  const segments = image.segments || [];
+
+  if (!usefulSections.length) {
+    return segments.map((item, index) => regionFrom(item, `${prefix}s${index}`, 'segment'));
+  }
+
+  const regions = usefulSections.map((item, index) => regionFrom(item, `${prefix}s${index}`, 'section'));
+  const mappedExecSections = usefulSections.filter((s) => sectionHasMappedAddress(s) && !!s.perms?.execute);
+
+  let extraIndex = usefulSections.length;
+  for (const seg of segments) {
+    if (!seg.perms?.execute) continue;
+    const segStart = BigInt(seg.address ?? 0);
+    const segSize = BigInt(seg.size ?? seg.fileSize ?? 0);
+    if (segSize <= 0n) continue;
+    const segEnd = segStart + segSize;
+
+    const coveredSpans = [];
+    for (const sec of mappedExecSections) {
+      const secStart = BigInt(sec.address ?? 0);
+      const secSize = BigInt(sec.size ?? sec.fileSize ?? 0);
+      if (secSize <= 0n) continue;
+      const secEnd = secStart + secSize;
+      if (secEnd <= segStart || secStart >= segEnd) continue;
+      coveredSpans.push({
+        start: secStart > segStart ? secStart : segStart,
+        end: secEnd < segEnd ? secEnd : segEnd,
+      });
+    }
+
+    coveredSpans.sort((a, b) => (a.start < b.start ? -1 : a.start > b.start ? 1 : 0));
+    const merged = [];
+    for (const span of coveredSpans) {
+      if (!merged.length) {
+        merged.push(span);
+      } else {
+        const last = merged[merged.length - 1];
+        if (span.start <= last.end) {
+          if (span.end > last.end) last.end = span.end;
+        } else {
+          merged.push(span);
+        }
+      }
+    }
+
+    let cursor = segStart;
+    for (const span of merged) {
+      if (span.start > cursor) {
+        emitUncovered(cursor, span.start);
+      }
+      if (span.end > cursor) {
+        cursor = span.end;
+      }
+    }
+    if (cursor < segEnd) {
+      emitUncovered(cursor, segEnd);
+    }
+
+    function emitUncovered(uStart, uEnd) {
+      const uSize = uEnd - uStart;
+      const offsetDelta = uStart - segStart;
+      const fileOffset = BigInt(seg.fileOffset ?? 0) + offsetDelta;
+      const segFileSize = BigInt(seg.fileSize ?? seg.size ?? 0);
+      const fileSize = offsetDelta < segFileSize
+        ? (segFileSize - offsetDelta < uSize ? segFileSize - offsetDelta : uSize)
+        : 0n;
+      const spanItem = {
+        name: seg.name,
+        segment: seg.name,
+        address: uStart,
+        size: uSize,
+        fileOffset,
+        fileSize,
+        perms: seg.perms,
+      };
+      regions.push(regionFrom(spanItem, `${prefix}s${extraIndex++}`, 'segment'));
+    }
+  }
+
+  return regions;
 }
 
 export function describeBinaryImage(image, options = {}) {
