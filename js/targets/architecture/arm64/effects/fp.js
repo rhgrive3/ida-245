@@ -34,8 +34,9 @@ function invalidStructuredRegisterWidth(op) {
 }
 
 function invalidStructuredFpImmediate(op) {
-  return op?.k === 'imm' && op.float != null
-    && (typeof op.float !== 'number' || !Number.isFinite(op.float));
+  if (op?.k !== 'imm') return false;
+  if (op.float != null && (typeof op.float !== 'number' || !Number.isFinite(op.float))) return true;
+  return op.bitPattern != null && typeof op.bitPattern !== 'bigint';
 }
 
 function invalidConditionalEvidence(mnemonic, ops) {
