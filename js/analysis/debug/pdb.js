@@ -347,6 +347,9 @@ export function parseTpiStream(bytes, budget = DEBUG_DEFAULT_BUDGET) {
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   const headerSize = view.getUint32(4, true);
   const firstIndex = view.getUint32(8, true);
+  if (headerSize < 56 || headerSize > bytes.length) {
+    return { types, unmodelled, complete: false, firstIndex };
+  }
   let offset = headerSize;
   let index = firstIndex;
 
