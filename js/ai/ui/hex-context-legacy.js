@@ -24,6 +24,11 @@ function toBigInt(value) {
   try { return BigInt(typeof value === 'string' && /^0x/i.test(value) ? value : String(value)); } catch { return null; }
 }
 
+function nonNegativeOffset(value) {
+  if (value == null) return 0;
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : 0;
+}
+
 function fixedRows(app) {
   return !!app.store.get('canDisassemble') && Number(app.store.get('instructionAlignment') || app.store.get('capability')?.instructionAlignment || 0) > 0;
 }
@@ -147,11 +152,15 @@ export function createHexAIContext(app) {
     analyze: (address, end, options) => analyzeModelAt(app, address, end, options),
     async searchStrings(query, options = {}) {
       const limit = Math.max(1, Math.min(200, Number(options.limit) || 50));
+      const offset = nonNegativeOffset(options.offset);
       const rows = await app.ensureStrings();
       const q = String(query || '').toLowerCase();
       const out = [];
+      let matches = 0;
       for (const row of rows || []) {
         if (q && !String(row.text || '').toLowerCase().includes(q)) continue;
+        matches++;
+        if (matches <= offset) continue;
         out.push({ text: row.text, stringAddress: row.addr });
         if (out.length >= limit) break;
       }
@@ -159,6 +168,7 @@ export function createHexAIContext(app) {
     },
     async searchFunctions(query, options = {}) {
       const limit = Math.max(1, Math.min(200, Number(options.limit) || 40));
+      const offset = nonNegativeOffset(options.offset);
       const q = String(query || '').toLowerCase();
       try { await app.ensureRecognition?.({maxFunctions:350000,knowledgeLimit:512}); } catch {}
       const ranked=app.recognition?.records || [];
@@ -169,11 +179,14 @@ export function createHexAIContext(app) {
           const cls=String(item.classification||'');
           const knowledge=(item.knowledge?.names||[]).concat(item.knowledge?.roles||[]).join(' ');
           if(q && !(`${name} ${cls} ${knowledge}`.toLowerCase().includes(q)))continue;
-          matches++; if(out.length<limit)out.push({addr:item.address,name:name||null,score:item.score||0,classification:item.classification,confidence:item.confidence,knowledge:item.knowledge||null});
+          matches++;
+          if(matches<=offset)continue;
+          if(out.length<limit)out.push({addr:item.address,name:name||null,score:item.score||0,classification:item.classification,confidence:item.confidence,knowledge:item.knowledge||null});
         }
-        out.complete=app.recognition.complete===true && matches<=limit;
+        const pageEnd=offset+out.length;
+        out.complete=app.recognition.complete===true && pageEnd>=matches;
         out.scannedCount=app.recognition.scannedCount;out.total=app.recognition.total;out.matchCount=matches;
-        out.truncationReason=app.recognition.complete!==true?(app.recognition.truncationReason||'recognition-incomplete'):matches>limit?'result-limit':null;
+        out.truncationReason=app.recognition.complete!==true?(app.recognition.truncationReason||'recognition-incomplete'):pageEnd<matches?'result-limit':null;
         out.coverage=app.recognition.total?app.recognition.scannedCount/app.recognition.total:1;
         return out;
       }
@@ -183,10 +196,13 @@ export function createHexAIContext(app) {
       for (let i = 0; i < maxScan; i++) {
         const name = String(sym.names[i] || '');
         if (q && !name.toLowerCase().includes(q)) continue;
-        matches++; if(out.length<limit) out.push({ addr: sym.addrs[i], name });
+        matches++;
+        if(matches<=offset)continue;
+        if(out.length<limit) out.push({ addr: sym.addrs[i], name });
       }
-      out.complete=maxScan===sym.names.length && matches<=limit; out.scannedCount=maxScan;out.total=sym.names.length;out.matchCount=matches;
-      out.truncationReason=maxScan<sym.names.length?'scan-budget':matches>limit?'result-limit':null;out.coverage=sym.names.length?maxScan/sym.names.length:1;
+      const pageEnd=offset+out.length;
+      out.complete=maxScan===sym.names.length && pageEnd>=matches; out.scannedCount=maxScan;out.total=sym.names.length;out.matchCount=matches;
+      out.truncationReason=maxScan<sym.names.length?'scan-budget':pageEnd<matches?'result-limit':null;out.coverage=sym.names.length?maxScan/sym.names.length:1;
       return out;
     },
     async decompile(address) {
