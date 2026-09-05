@@ -223,13 +223,36 @@ function runtimeMutation(risk, reversible = false, inputSchema = RUNTIME_SESSION
   return { mutability: 'runtime-dangerous', risk, reversible, requiresApproval: true, scopeSupport: ['function', 'binary'], runtimeBound: true, inputSchema };
 }
 
+function normalizeCapabilityId(value) {
+  if (typeof value !== 'string') return null;
+  const id = value.trim();
+  return id || null;
+}
+
+function snapshotCapabilityEntry(entry, id) {
+  const snapshot = {};
+  for (const key of Reflect.ownKeys(entry)) {
+    if (key === 'id') continue;
+    const descriptor = Object.getOwnPropertyDescriptor(entry, key);
+    if (descriptor?.enumerable) snapshot[key] = entry[key];
+  }
+  snapshot.id = id;
+  return Object.freeze(snapshot);
+}
+
 export class CapabilityCatalog {
   constructor(entries = CATALOG) {
-    this.entries = new Map(entries.map((entry) => [entry.id, entry]));
-    if (this.entries.size !== entries.length) throw new Error('duplicate capability id');
+    const normalizedEntries = entries.map((entry) => {
+      const rawId = entry?.id;
+      const id = normalizeCapabilityId(rawId);
+      if (!id) throw new Error('invalid capability id');
+      return [id, snapshotCapabilityEntry(entry, id)];
+    });
+    this.entries = new Map(normalizedEntries);
+    if (this.entries.size !== normalizedEntries.length) throw new Error('duplicate capability id');
   }
-  get(id) { return this.entries.get(String(id)) || null; }
-  has(id) { return this.entries.has(String(id)); }
+  get(id) { const normalized = normalizeCapabilityId(id); return normalized ? this.entries.get(normalized) || null : null; }
+  has(id) { const normalized = normalizeCapabilityId(id); return normalized ? this.entries.has(normalized) : false; }
   list(context = null) {
     return [...this.entries.values()].map((entry) => {
       let scopeSupport = entry.scopeSupport;
