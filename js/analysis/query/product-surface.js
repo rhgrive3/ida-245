@@ -65,6 +65,10 @@ function functionAddress(value) {
   throw new TypeError('analysis-product-function-id-invalid');
 }
 
+function canonicalRecognitionConfidence(value) {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 1 ? value : 0;
+}
+
 async function assertCurrentSnapshot(app, snapshot, options = {}) {
   abortIfNeeded(options.signal);
   const current = await app.analysisQueries.snapshot(options);
@@ -398,7 +402,7 @@ export function createProductSurfaceQueries(app) {
       try { local = await app.analyzeFunctionAt(address, { signal:options.signal }); } catch (error) { if (options.signal?.aborted) throw error; }
       const baseResult = base ? {
         classification:base.classification || 'UNKNOWN',
-        confidence:Number(base.confidence || 0),
+        confidence:canonicalRecognitionConfidence(base.confidence),
         evidence:Array.isArray(base.evidence) ? base.evidence.slice() : [],
         knowledgeSourceId:base.knowledgeSourceId || null,
       } : null;
