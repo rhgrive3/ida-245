@@ -202,6 +202,15 @@ export function runPassTransaction(state, pass, context = {}, budget = {}) {
   const refuse = (stopReason) => Object.freeze({
     committed: false, result: null, invalidated: Object.freeze([]), staged: Object.freeze([]), stopReason,
   });
+  // A result may only exercise the descriptor authority of the pass that was
+  // actually invoked. Otherwise mutation/invalidation uses one descriptor while
+  // provenance and replay identity name another pass.
+  if (result.contractVersion !== descriptor.contractVersion
+      || result.passId !== descriptor.id
+      || result.passVersion !== descriptor.version
+      || result.stage !== descriptor.stage) {
+    return refuse(`result-descriptor-mismatch:${descriptor.id}`);
+  }
   // A contract violation is refused the same way a cancellation is: nothing
   // commits and the caller gets a reason. Throwing here instead would turn a
   // withheld ledger into an uncaught exception at the vertical, which is a
