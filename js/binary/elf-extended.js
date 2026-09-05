@@ -55,7 +55,7 @@ export function collectRelrRelocations(r, tags, image, bits, context = null) {
   if(off==null||size==null){partial(image,'DT_RELR table crosses a file-backed PT_LOAD boundary');return out;}
   if (!budget.claimInput(size, 'DT_RELR')) return out;
   if (size % word) partial(image,'DT_RELRSZ is not a multiple of DT_RELRENT');
-  let base=0n; const wordBits=BigInt(word*8);
+  let base=0n, hasBase=false; const wordBits=BigInt(word*8);
   const count=Math.floor(size/word);
   outer: for(let i=0;i<count;i++){
     if (!budget.step()) break;
@@ -63,8 +63,10 @@ export function collectRelrRelocations(r, tags, image, bits, context = null) {
     if((entry&1n)===0n){
       if (!budget.push(out,{address:entry,symIndex:0,type:null,addend:null,source:'PT_DYNAMIC-RELR',relative:true},'DT_RELR')) break;
       base=entry+BigInt(word);
+      hasBase=true;
       continue;
     }
+    if(!hasBase){partial(image,'DT_RELR bitmap entry appears before any address entry');break;}
     for(let bit=1n;bit<wordBits;bit++) {
       if (!budget.step()) break outer;
       if(entry&(1n<<bit)) {
