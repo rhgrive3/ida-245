@@ -19,6 +19,9 @@ export const RUNTIME_EVENT_KINDS = Object.freeze([
 ]);
 
 const COMPLETENESS_RANK = Object.freeze({ unsupported: 0, truncated: 1, partial: 2, bounded: 3, complete: 4 });
+const UTF8_ENCODER = new TextEncoder();
+
+function encodedByteLength(value) { return UTF8_ENCODER.encode(value).byteLength; }
 
 function required(value, code, message) {
   if (typeof value !== 'string') throw new DebugAdapterError(code, message || code);
@@ -173,44 +176,6 @@ export function normalizeLegacyRuntimeEvent(input, context = {}) {
   });
 }
 
-function estimatePayloadSize(value, maxBytes) {
-  let size = 0;
-  const active = new WeakSet();
-  const stack = [{ value, exit: false }];
-  while (stack.length && size <= maxBytes) {
-    const frame = stack.pop();
-    const v = frame.value;
-    if (frame.exit) {
-      active.delete(v);
-      continue;
-    }
-    if (v == null) { size += 4; continue; }
-    if (typeof v === 'boolean') { size += 5; continue; }
-    if (typeof v === 'number') { size += 8; continue; }
-    if (typeof v === 'string') { size += v.length * 2 + 2; continue; }
-    if (typeof v === 'bigint') { size += 16; continue; }
-    if (ArrayBuffer.isView(v)) { size += v.byteLength * 4; continue; }
-    if (v instanceof ArrayBuffer) { size += v.byteLength * 4; continue; }
-    if (typeof v === 'object') {
-      if (active.has(v)) return maxBytes + 1;
-      active.add(v);
-      stack.push({ value: v, exit: true });
-      size += 2;
-      if (Array.isArray(v)) {
-        for (let i = v.length - 1; i >= 0; i--) stack.push({ value: v[i], exit: false });
-      } else {
-        const keys = Object.keys(v);
-        for (let i = keys.length - 1; i >= 0; i--) {
-          const key = keys[i];
-          size += key.length * 2 + 4;
-          stack.push({ value: v[key], exit: false });
-        }
-      }
-    }
-  }
-  return size;
-}
-
 export function createRuntimeEventBatch(input = {}) {
   const rawEvents = input.events == null ? [] : input.events;
   if (!Array.isArray(rawEvents)) throw new DebugAdapterError('runtime-invalid-event-array', 'events must be an array');
@@ -261,11 +226,6 @@ export class RuntimeEventNormalizer {
   push(input) {
     const hasDirectIdentity = input && typeof input === 'object'
       && ['runtimeSessionId', 'providerId', 'sessionEpoch'].some((key) => Object.hasOwn(input, key));
-    const rawPayload = input?.payload ?? (input && typeof input === 'object' && !hasDirectIdentity ? input : null);
-    if (rawPayload && estimatePayloadSize(rawPayload, this.maxBytes - this.queuedBytes) > this.maxBytes - this.queuedBytes) {
-      this.#dropped++;
-      return null;
-    }
     const event = hasDirectIdentity ? createRuntimeEvent(input) : normalizeLegacyRuntimeEvent(input, this.context);
     const contextRuntimeSessionId = required(this.context.runtimeSessionId, 'runtime-session-id-required', 'runtime event batch requires runtimeSessionId');
     const contextProviderId = required(this.context.providerId, 'runtime-provider-required', 'runtime event batch requires providerId');
@@ -274,7 +234,7 @@ export class RuntimeEventNormalizer {
     const dedupe = dedupeIdentity(event);
     const scoped = dedupe ? `${event.sessionEpoch}:${dedupe}` : null;
     if (scoped && this.#seen.has(scoped)) return null;
-    const bytes = stableStringify(event).length * 2;
+    const bytes = encodedByteLength(stableStringify(event));
     if (this.#queue.length >= this.maxEvents || this.queuedBytes + bytes > this.maxBytes) {
       this.#dropped++;
       return null;
