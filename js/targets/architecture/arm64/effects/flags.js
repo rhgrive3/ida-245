@@ -8,10 +8,15 @@ export {
   emitArm64Condition,
 } from './flags-core.js';
 import { createArm64EffectContext } from './common.js';
-import { liftArm64FlagEffects as liftArm64FlagEffectsCore } from './flags-core.js';
+import {
+  ARM64_FLAG_EFFECT_MNEMONICS as FLAG_MNEMONICS,
+  liftArm64FlagEffects as liftArm64FlagEffectsCore,
+} from './flags-core.js';
+import { snapshotArm64ImmediateOperands } from './immediate-authority.js';
 
 const STRICT_REGISTER_LHS = new Set(['cmp','cmn','ccmp','ccmn']);
 const SP_LHS_MNEMONICS = new Set(['cmp','cmn']);
+const STRICT_IMMEDIATE_VALUE_MNEMONICS = new Set(['cmp','cmn','tst']);
 const EXTEND_KINDS = new Set(['uxtb','uxth','uxtw','uxtx','sxtb','sxth','sxtw','sxtx']);
 
 function registerClass(op) {
@@ -75,6 +80,10 @@ function validTstRegisterClass(ops) {
   return !ops.some((op) => op?.k === 'reg' && registerClass(op) === 'sp');
 }
 
+function hasNonCanonicalImmediateValue(ops) {
+  return ops.some((op) => op?.k === 'imm' && op.value != null && typeof op.value !== 'bigint');
+}
+
 function validConditionalCompareCondition(op) {
   return op?.k === 'cond' && op.shift == null && op.extend == null;
 }
@@ -94,26 +103,39 @@ function validConditionalCompareImmediates(ops) {
 export function liftArm64FlagEffects(instruction, options = {}) {
   if (typeof instruction?.mnemonic !== 'string') return null;
   const mnemonic = instruction.mnemonic.trim().toLowerCase();
-  const ops = Array.isArray(instruction?.ops) ? instruction.ops : [];
+  const rawOps = Array.isArray(instruction?.ops) ? instruction.ops : [];
+  const snapshot = FLAG_MNEMONICS.has(mnemonic)
+    ? snapshotArm64ImmediateOperands(instruction, rawOps)
+    : Object.freeze({ instruction, ops:rawOps });
+  if (!snapshot) {
+    return createArm64EffectContext(instruction, options).partial(
+      `arm64-${mnemonic}-immediate-value-unencodable`, ['flags','other']);
+  }
+  const stableInstruction = snapshot.instruction;
+  const ops = snapshot.ops;
+  if (STRICT_IMMEDIATE_VALUE_MNEMONICS.has(mnemonic) && hasNonCanonicalImmediateValue(ops)) {
+    return createArm64EffectContext(stableInstruction, options).partial(
+      `arm64-${mnemonic}-immediate-value-unencodable`, ['flags','other']);
+  }
   if (STRICT_REGISTER_LHS.has(mnemonic) && !validRegisterLhs(mnemonic, ops[0])) {
-    return liftArm64FlagEffectsCore({ ...instruction, ops: [] }, options);
+    return liftArm64FlagEffectsCore({ ...stableInstruction, ops: [] }, options);
   }
   if (SP_LHS_MNEMONICS.has(mnemonic) && !validSpImmediateRhs(ops[1])) {
-    return liftArm64FlagEffectsCore({ ...instruction, ops: [] }, options);
+    return liftArm64FlagEffectsCore({ ...stableInstruction, ops: [] }, options);
   }
   if (STRICT_REGISTER_LHS.has(mnemonic) && !validRegisterRhs(mnemonic, ops[0], ops[1])) {
-    return liftArm64FlagEffectsCore({ ...instruction, ops: [] }, options);
+    return liftArm64FlagEffectsCore({ ...stableInstruction, ops: [] }, options);
   }
   if ((mnemonic === 'ccmp' || mnemonic === 'ccmn') && ops.length === 4
     && (!validConditionalCompareCondition(ops[3]) || !validConditionalCompareImmediates(ops))) {
     // Malformed conditional-compare evidence must not produce register reads
     // or any definite state: return a bare partial with zero operations.
     // (Arity failures keep the core's canonical operand-shape reason.)
-    const ctx = createArm64EffectContext(instruction, options);
+    const ctx = createArm64EffectContext(stableInstruction, options);
     return ctx.partial('arm64-conditional-compare-evidence-invalid', ['flags', 'other']);
   }
   if (mnemonic === 'tst' && !validTstRegisterClass(ops)) {
-    return liftArm64FlagEffectsCore({ ...instruction, ops: [] }, options);
+    return liftArm64FlagEffectsCore({ ...stableInstruction, ops: [] }, options);
   }
-  return liftArm64FlagEffectsCore(instruction, options);
+  return liftArm64FlagEffectsCore(stableInstruction, options);
 }
