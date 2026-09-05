@@ -128,23 +128,66 @@ function repeatedStringEffects(ctx, spec, repeat, addressBits) {
   if (sourcePresent && !sourceAddress) return ctx.partial('x86-repeated-string-source-address-unmodelled',['memory','registers']);
   if (destinationPresent && !destinationAddress) return ctx.partial('x86-repeated-string-destination-address-unmodelled',['memory','registers']);
 
-  const inputs = [], registersRead = [], registersWritten = [], outputs = [], outputRoles = [];
-  const addInput = (name,value) => { if (!value) return false; inputs.push(value); registersRead.push(name); return true; };
+  const inputs = [], inputRoles = [], registersRead = [], registersWritten = [], outputs = [], outputRoles = [];
+  const addInput = (name,value,role) => { if (!value) return false; inputs.push(value); inputRoles.push(Object.freeze(role)); registersRead.push(name); return true; };
   const addOutput = (role,widthBits,registerName) => { outputs.push(widthBits); outputRoles.push({role,registerName}); if (registerName) registersWritten.push(registerName); };
+  const addressStates = [];
+  const readAddressState = (role,physicalRegister) => {
+    const full = readPhysicalRegister(ctx,physicalRegister);
+    if (!full) return null;
+    registersRead.push(physicalRegister);
+    const state = { role, physicalRegister,view:pointerName(role,addressBits),full,semantic:null };
+    addressStates.push(state);
+    return state;
+  };
 
-  const count = readPhysicalRegister(ctx,'rcx');
-  if (!addInput('rcx',count)) return ctx.partial('x86-repeated-string-count-unmodelled',['registers']);
-  const df = ctx.readFlag('DF'); inputs.push(df); registersRead.push('rflags');
-  if (sourcePresent && !addInput('rsi',readPhysicalRegister(ctx,'rsi'))) return ctx.partial('x86-repeated-string-source-pointer-unmodelled',['registers']);
-  if (destinationPresent && !addInput('rdi',readPhysicalRegister(ctx,'rdi'))) return ctx.partial('x86-repeated-string-destination-pointer-unmodelled',['registers']);
+  const countState = readAddressState('count','rcx');
+  if (!countState) return ctx.partial('x86-repeated-string-count-unmodelled',['registers']);
+  const df = ctx.readFlag('DF'); registersRead.push('rflags');
+  const sourceState = sourcePresent ? readAddressState('source','rsi') : null;
+  if (sourcePresent && !sourceState) return ctx.partial('x86-repeated-string-source-pointer-unmodelled',['registers']);
+  const destinationState = destinationPresent ? readAddressState('destination','rdi') : null;
+  if (destinationPresent && !destinationState) return ctx.partial('x86-repeated-string-destination-pointer-unmodelled',['registers']);
+
+  if (addressBits === 32) {
+    const projected = addressStates.map((state) => ctx.temporary(32, `repeated-string-${state.view}`));
+    ctx.addOperation({
+      kind:'value', opcode:'x86-string-address-state-project32',
+      inputs:addressStates.map((state) => state.full), outputs:projected,
+      metadata:{
+        semantic:'x86-repeated-string-address-state-view', addressSizeBits:32,
+        projections:addressStates.map((state) => ({ role:state.role, physicalRegister:state.physicalRegister, view:state.view, lsb:0, widthBits:32 })),
+      },
+    });
+    for (let index = 0; index < addressStates.length; index++) addressStates[index].semantic = projected[index];
+  } else {
+    for (const state of addressStates) state.semantic = state.full;
+  }
+
+  const addAddressStateInputs = (state) => {
+    if (!addInput(state.physicalRegister,state.semantic,{ role:state.role, kind:'semantic', register:state.view, widthBits:addressBits })) return false;
+    if (addressBits === 32 && !addInput(state.physicalRegister,state.full,{ role:state.role, kind:'zero-count-preservation', register:state.physicalRegister, widthBits:64 })) return false;
+    return true;
+  };
+  if (!addAddressStateInputs(countState)) return ctx.partial('x86-repeated-string-count-unmodelled',['registers']);
+  inputs.push(df); inputRoles.push(Object.freeze({ role:'direction-flag', kind:'semantic', flag:'DF', widthBits:1 }));
+  if (sourceState && !addAddressStateInputs(sourceState)) return ctx.partial('x86-repeated-string-source-pointer-unmodelled',['registers']);
+  if (destinationState && !addAddressStateInputs(destinationState)) return ctx.partial('x86-repeated-string-destination-pointer-unmodelled',['registers']);
   if (spec.kind === 'stos' || spec.kind === 'scas') {
     const accumulator = x86RegisterOperand(accumulatorName(spec.widthBits)), value = accumulator ? ctx.readRegister(accumulator) : null;
-    if (!addInput('rax',value)) return ctx.partial('x86-repeated-string-accumulator-unmodelled',['registers']);
+    if (!addInput('rax',value,{ role:'accumulator', kind:'semantic', register:accumulatorName(spec.widthBits), widthBits:spec.widthBits })) return ctx.partial('x86-repeated-string-accumulator-unmodelled',['registers']);
   }
-  if (spec.kind === 'lods' && !addInput('rax',readPhysicalRegister(ctx,'rax'))) return ctx.partial('x86-repeated-string-accumulator-state-unmodelled',['registers']);
+  if (spec.kind === 'lods' && !addInput('rax',readPhysicalRegister(ctx,'rax'),{ role:'accumulator', kind:'zero-count-preservation', register:'rax', widthBits:64 })) return ctx.partial('x86-repeated-string-accumulator-state-unmodelled',['registers']);
   if (spec.kind === 'cmps' || spec.kind === 'scas') {
-    for (const flag of COMPARE_FLAGS) { const value = ctx.readFlag(flag); inputs.push(value); }
-    registersRead.push('rflags');
+    if (addressBits === 32) {
+      const flags = readPhysicalRegister(ctx,'rflags');
+      if (!addInput('rflags',flags,{ role:'compare-flags', kind:'zero-count-preservation', register:'rflags', widthBits:64, flags:COMPARE_FLAGS })) return ctx.partial('x86-repeated-string-compare-flags-unmodelled',['flags','registers']);
+    } else {
+      for (const flag of COMPARE_FLAGS) {
+        const value = ctx.readFlag(flag); inputs.push(value); inputRoles.push(Object.freeze({ role:`flag-${flag}`, kind:'zero-count-preservation', flag, widthBits:1 }));
+      }
+      registersRead.push('rflags');
+    }
   }
 
   addOutput('count',64,'rcx');
@@ -190,6 +233,13 @@ function repeatedStringEffects(ctx, spec, repeat, addressBits) {
     termination:Object.freeze({ entry:'count != 0', continuation, normalControl:'fallthrough', zeroCount:'fallthrough with no data-memory access and no architectural state change', initialConditionFlagUsedBeforeFirstIteration:false }),
     flags:flagContract, memory:iterationMemory,
     accumulator:spec.kind === 'lods' ? Object.freeze({ physicalRegister:'rax', view:accumulatorName(spec.widthBits), zeroCount:'full RAX preserved', nonzero:spec.widthBits === 8 ? 'final successful AL load replaces low 8 bits and preserves upper 56 bits of RAX' : spec.widthBits === 16 ? 'final successful AX load replaces low 16 bits and preserves upper 48 bits of RAX' : spec.widthBits === 32 ? 'final successful EAX load zero-extends into full RAX' : 'final successful RAX load replaces full RAX' }) : spec.kind === 'stos' || spec.kind === 'scas' ? Object.freeze({ physicalRegister:'rax', view:accumulatorName(spec.widthBits), access:'read-only', zeroCount:'no accumulator effect' }) : null,
+    addressState:Object.freeze({
+      semanticWidthBits:addressBits,
+      inputPolicy:addressBits === 32 ? 'semantic ECX/ESI/EDI low-32 views plus full physical preservation carriers' : 'full physical RCX/RSI/RDI values are the semantic address-size views',
+      arithmetic:addressBits === 32 ? 'modulo 2^32' : 'modulo 2^64',
+      outputPolicy:addressBits === 32 ? '64-bit physical output selects full entry state when ECX is zero; otherwise commits zero-extended 32-bit count/pointer results' : '64-bit physical result',
+    }),
+    inputRoles:Object.freeze(inputRoles),
     outputRoles:Object.freeze(outputRoles.map((entry) => Object.freeze(entry))),
   };
   const intrinsicOutputs = ctx.intrinsic(`x86.${repeat}.${spec.kind}.${spec.widthBits}`, inputs, outputs, {

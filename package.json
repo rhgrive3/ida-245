@@ -5,7 +5,7 @@
   "description": "Browser-first universal binary analysis platform for Mach-O, ELF and PE, optimized for iPad.",
   "scripts": {
     "lint": "node tests/check.mjs",
-    "check": "npm run lint && npm run invariants:test && npm run migration:test && npm run module-boundaries:test && npm run evidence-writers:test && npm run semantic-v2:test && npm run phase4:test && npm run phase5:test && npm run phase6:test && npm run phase7:test && npm run phase8:test && npm run phase9:test && npm run phase10:test && npm run phase11:test && npm run phase12:test && npm test && npm run benchmark:baseline",
+    "check": "npm run lint && npm run invariants:test && npm run migration:test && npm run module-boundaries:test && npm run evidence-writers:test && npm run semantic-v2:test && npm run phase4:test && npm run phase5:test && npm run phase6:test && npm run effects:test && npm run phase7:test && npm run phase8:test && npm run phase9:test && npm run phase10:test && npm run phase11:test && npm run phase12:test && npm test && npm run benchmark:baseline",
     "check:parallel": "node scripts/run-check-parallel.mjs",
     "check:one": "node scripts/run-one-check.mjs",
     "invariants:test": "node tools/validation/invariant-gates.mjs",
