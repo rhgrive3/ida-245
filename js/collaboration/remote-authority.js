@@ -44,6 +44,18 @@ function identityList(value, code) {
   return [...new Set(value.map((identity) => required(identity, code)))].sort();
 }
 
+function permissionList(value) {
+  if (!Array.isArray(value)) return [];
+  const permissions = [];
+  for (const permission of value) {
+    if (typeof permission !== 'string' || permission.length === 0) {
+      throw new TypeError('remote-gate-permission-invalid');
+    }
+    permissions.push(permission);
+  }
+  return [...new Set(permissions)].sort();
+}
+
 function byteLength(value) {
   const text = JSON.stringify(jsonSafe(value));
   return typeof TextEncoder !== 'undefined' ? new TextEncoder().encode(text).length : text.length;
@@ -57,7 +69,7 @@ function normalizePermissions(value) {
   for (const [actor, permissions] of entries) {
     const identity = required(actor, 'remote-gate-actor-identity-invalid');
     if (Object.hasOwn(normalized, identity)) throw new TypeError('remote-gate-actor-identity-duplicate');
-    normalized[identity] = list(permissions);
+    normalized[identity] = permissionList(permissions);
   }
   return normalized;
 }
