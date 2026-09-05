@@ -356,6 +356,7 @@ export function awaitCancellableProducer(operation, signal) {
       finish(reject, abortError(signal));
     };
     signal.addEventListener('abort', onAbort, { once:true });
+    if (signal.aborted) onAbort();
     promise.then((value) => finish(resolve, value), (error) => finish(reject, error));
   });
 }
