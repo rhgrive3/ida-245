@@ -87,6 +87,22 @@ function debugGeneralDetectFault() {
   });
 }
 
+function debugAliasUndefinedFault(id) {
+  return Object.freeze({
+    kind:'undefined-opcode',
+    condition:Object.freeze({
+      kind:'x86-debug-register-alias-control',
+      instruction:'mov',
+      register:id,
+      controlRegister:'cr4',
+      field:'DE',
+      value:1,
+      rule:'CR4.DE=1 makes DR4/DR5 access undefined after any DR7.GD pre-access #DB',
+    }),
+    detail:Object.freeze({ fault:'#UD' }),
+  });
+}
+
 function expectedShape(encoded) {
   if (encoded.opcode === 0x20) return { kind:'control-register', privilegedIndex:1 };
   if (encoded.opcode === 0x22) return { kind:'control-register', privilegedIndex:0 };
@@ -122,6 +138,30 @@ export function liftX86SystemRegisterMoveEffects(instruction, context = {}) {
     });
   }
 
+  const privilegedId = String(privileged.register.id).toLowerCase();
+  if (actualKind === 'debug-register' && (privilegedId === 'dr4' || privilegedId === 'dr5')) {
+    return ctx.partial('x86-debug-register-alias-state-unmodelled', ['registers','faults','other'], {
+      possibleFaults:[
+        privilegeFault(actualKind, privilegedId),
+        debugGeneralDetectFault(),
+        debugAliasUndefinedFault(privilegedId),
+      ],
+      metadata:{
+        family:'system',
+        operation:'mov',
+        systemRegisterMove:true,
+        registerClass:actualKind,
+        privilegedRegister:privilegedId,
+        encodingValidated:true,
+        controlRegister:'cr4',
+        controlField:'DE',
+        aliasWhenClear:privilegedId === 'dr4' ? 'dr6' : 'dr7',
+        faultWhenSet:'#UD',
+        debugGeneralDetectPrecedesAccess:true,
+      },
+    });
+  }
+
   const sourceValue = ctx.readRegister(source);
   if (!sourceValue) {
     return ctx.partial('x86-mov-control-debug-source-state-unmodelled', ['registers'], {
@@ -129,7 +169,6 @@ export function liftX86SystemRegisterMoveEffects(instruction, context = {}) {
     });
   }
 
-  const privilegedId = String(privileged.register.id).toLowerCase();
   const sourceId = String(source.register.physicalId).toLowerCase();
   const destinationId = String(destination.register.physicalId).toLowerCase();
   const writesPrivileged = shape.privilegedIndex === 0;
