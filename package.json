@@ -12,7 +12,7 @@
     "migration:test": "node tests/migration-guardrails.mjs && node tests/reusable-release-validation.mjs",
     "module-boundaries:test": "node tests/module-boundaries.mjs && node tools/validation/module-boundaries.mjs",
     "evidence-writers:test": "node tests/legacy-evidence-writers.mjs && node tools/validation/legacy-evidence-writers.mjs",
-    "core:test": "node tests/core-identity-contracts.mjs && node tests/issue-3786-slice-source-range-type-witness.test.mjs && node tests/core-evidence-contracts.mjs && node tests/core-budget-scopes.mjs && node tests/evidence-canonical-roundtrip.mjs",
+    "core:test": "node tests/core-identity-contracts.mjs && node tests/issue-3786-slice-source-range-type-witness.test.mjs && node tests/issue-3915-core-identity-special-numbers.test.mjs && node tests/core-evidence-contracts.mjs && node tests/core-budget-scopes.mjs && node tests/evidence-canonical-roundtrip.mjs",
     "effects:test": "node tests/machine-effects/run.mjs",
     "semantic-v2:test": "node tests/semantic-v2/run.mjs",
     "phase4:test": "node tests/phase4/run.mjs",
