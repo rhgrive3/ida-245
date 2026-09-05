@@ -1,3 +1,4 @@
+import { createMachineEffectBundle } from '../../../../semantics/effects/index.js';
 import { decorateArm64BtiGuardedPageEffects } from './bti-guard-state.js';
 import { liftArm64ControlEffects } from './control.js';
 import { createArm64EffectContext, directTargetOf, immediateOf, instructionMnemonic } from './common.js';
@@ -448,6 +449,135 @@ function normalizedContext(context = {}) {
   return { ...context, ...machineEffectsOptions, options: machineEffectsOptions, machineEffectsOptions };
 }
 
+const FP_ADVSIMD_ACCESS_CONTROLS = Object.freeze([
+  'PSTATE.EL',
+  'CPACR_EL1.FPEN',
+  'CPTR_EL2.FPEN',
+  'CPTR_EL2.TFP',
+  'CPTR_EL3.TFP',
+  'HCR_EL2.E2H',
+  'HCR_EL2.TGE',
+]);
+
+function fpAdvSimdAccessUnknown() {
+  return { state:'unknown', target:'environment-dependent-exception-level' };
+}
+
+function validFpAdvSimdBoolean(value) {
+  return typeof value === 'boolean';
+}
+
+function validFpAdvSimdFpen(value) {
+  return typeof value === 'number' && Number.isInteger(value) && value >= 0 && value <= 3;
+}
+
+function resolveFpAdvSimdAccess(context) {
+  const access = context?.arm64AccessControl;
+  if (!access || typeof access !== 'object' || Array.isArray(access)) return fpAdvSimdAccessUnknown();
+  const currentEL = access.currentEL;
+  if (!Number.isInteger(currentEL) || currentEL < 0 || currentEL > 3) return fpAdvSimdAccessUnknown();
+
+  if (!validFpAdvSimdBoolean(access.el3Implemented)) return fpAdvSimdAccessUnknown();
+  if (access.el3Implemented) {
+    if (!validFpAdvSimdBoolean(access.cptrEl3Tfp)) return fpAdvSimdAccessUnknown();
+    if (access.cptrEl3Tfp) {
+      return currentEL === 3
+        ? { state:'disabled', target:'EL3' }
+        : fpAdvSimdAccessUnknown();
+    }
+  }
+  if (currentEL === 3) return { state:'allowed' };
+
+  if (!validFpAdvSimdBoolean(access.el2Enabled)) return fpAdvSimdAccessUnknown();
+  if (currentEL === 2 && !access.el2Enabled) return fpAdvSimdAccessUnknown();
+  const el2InHost = access.el2Enabled ? access.el2InHost : false;
+  if (access.el2Enabled && !validFpAdvSimdBoolean(el2InHost)) return fpAdvSimdAccessUnknown();
+
+  if (currentEL === 0) {
+    if (!validFpAdvSimdBoolean(access.el0InHost)) return fpAdvSimdAccessUnknown();
+    if (access.el0InHost && (!access.el2Enabled || !el2InHost)) return fpAdvSimdAccessUnknown();
+    if (!access.el0InHost) {
+      if (!validFpAdvSimdFpen(access.cpacrEl1Fpen)) return fpAdvSimdAccessUnknown();
+      if (access.cpacrEl1Fpen !== 3) {
+        const target = access.el2Enabled && access.hcrEl2Tge === true
+          ? 'EL2'
+          : access.hcrEl2Tge === false || !access.el2Enabled
+            ? 'EL1'
+            : 'environment-dependent-exception-level';
+        return { state:'disabled', target };
+      }
+    } else {
+      if (!validFpAdvSimdFpen(access.cptrEl2Fpen)) return fpAdvSimdAccessUnknown();
+      if (access.cptrEl2Fpen !== 3) return { state:'disabled', target:'EL2' };
+    }
+  } else if (currentEL === 1) {
+    if (!validFpAdvSimdFpen(access.cpacrEl1Fpen)) return fpAdvSimdAccessUnknown();
+    if ((access.cpacrEl1Fpen & 1) === 0) return { state:'disabled', target:'EL1' };
+  }
+
+  if (access.el2Enabled) {
+    if (el2InHost) {
+      if (!validFpAdvSimdFpen(access.cptrEl2Fpen)) return fpAdvSimdAccessUnknown();
+      if ((access.cptrEl2Fpen & 1) === 0) return { state:'disabled', target:'EL2' };
+    } else {
+      if (!validFpAdvSimdBoolean(access.cptrEl2Tfp)) return fpAdvSimdAccessUnknown();
+      if (access.cptrEl2Tfp) return { state:'disabled', target:'EL2' };
+    }
+  }
+  return { state:'allowed' };
+}
+
+function withFpAdvSimdAccessTrap(bundle, context) {
+  if (!bundle || !['exact','exact-with-intrinsic'].includes(bundle.completeness)) return bundle;
+  const access = resolveFpAdvSimdAccess(context);
+  const possibleFaults = bundle.possibleFaults.filter((fault) => fault.kind !== 'fp-advsimd-access-trap');
+  if (access.state === 'allowed') {
+    if (possibleFaults.length === bundle.possibleFaults.length) return bundle;
+    return createMachineEffectBundle({
+      instructionId:bundle.instructionId,
+      architectureId:bundle.architectureId,
+      mode:bundle.mode,
+      operations:bundle.operations,
+      controlEffect:bundle.controlEffect,
+      possibleFaults,
+      origin:bundle.origin,
+      completeness:bundle.completeness,
+      ...(bundle.unknownEffects == null ? {} : { unknownEffects:bundle.unknownEffects }),
+      ...(bundle.statePreservation == null ? {} : { statePreservation:bundle.statePreservation }),
+      ...(bundle.metadata == null ? {} : { metadata:bundle.metadata }),
+    }, context?.machineEffectsOptions || {});
+  }
+  const accessFault = access.state === 'disabled'
+    ? {
+      kind:'fp-advsimd-access-trap',
+      detail:{ target:access.target, accessState:'disabled', check:'CheckFPAdvSIMDEnabled' },
+    }
+    : {
+      kind:'fp-advsimd-access-trap',
+      condition:{
+        kind:'architectural-access-check',
+        architecture:'arm64',
+        access:'fp-advsimd',
+        check:'CheckFPAdvSIMDEnabled',
+        controls:FP_ADVSIMD_ACCESS_CONTROLS,
+      },
+      detail:{ target:'environment-dependent-exception-level', accessState:'unknown' },
+    };
+  return createMachineEffectBundle({
+    instructionId:bundle.instructionId,
+    architectureId:bundle.architectureId,
+    mode:bundle.mode,
+    operations:bundle.operations,
+    controlEffect:bundle.controlEffect,
+    possibleFaults:[...possibleFaults, accessFault],
+    origin:bundle.origin,
+    completeness:bundle.completeness,
+    ...(bundle.unknownEffects == null ? {} : { unknownEffects:bundle.unknownEffects }),
+    ...(bundle.statePreservation == null ? {} : { statePreservation:bundle.statePreservation }),
+    ...(bundle.metadata == null ? {} : { metadata:bundle.metadata }),
+  }, context?.machineEffectsOptions || {});
+}
+
 export function liftArm64MachineEffects(decoded, context = {}) {
   const instruction = normalizedInstruction(decoded, context);
   const familyContext = normalizedContext(context);
@@ -457,8 +587,10 @@ export function liftArm64MachineEffects(decoded, context = {}) {
     return decorateArm64BtiGuardedPageEffects(instruction, partial, familyContext);
   }
   for (const family of ARM64_EFFECT_FAMILIES) {
-    const result = family.lift(instruction, familyContext);
-    if (result != null) return decorateArm64BtiGuardedPageEffects(instruction, result, familyContext);
+    let result = family.lift(instruction, familyContext);
+    if (result == null) continue;
+    if (family.id === 'fp' || family.id === 'simd') result = withFpAdvSimdAccessTrap(result, familyContext);
+    return decorateArm64BtiGuardedPageEffects(instruction, result, familyContext);
   }
   return null;
 }
