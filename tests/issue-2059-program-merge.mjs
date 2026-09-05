@@ -162,4 +162,46 @@ const cardinalityMismatch = new ProgramIndex({
 assert.equal(cardinalityMismatch.callCount, 2, '#3633: call graph clamps to the shortest owned array');
 assert.equal(cardinalityMismatch.refCount, 1, '#3633: ref graph clamps to the shortest owned array');
 
-console.log('issue #2059/#3416/#3633/#4546/#4934 program merge/index regressions passed');
+// #4144: supplied completeness metadata is an authority boundary. Only an
+// explicit boolean true may assert source completeness; malformed explicit
+// values must fail closed rather than becoming true through `!== false`.
+const completenessScan = {
+  callFrom:new BigUint64Array(0),
+  callTo:new BigUint64Array(0),
+  refFrom:new BigUint64Array(0),
+  refTo:new BigUint64Array(0),
+  refKind:new Uint8Array(0),
+};
+for (const malformed of ['false', [], {}, 0, 1, null, undefined]) {
+  const program = new ProgramIndex({
+    ...completenessScan,
+    completeness:{ complete:malformed, reasons:[] },
+  }, null, null);
+  assert.equal(program.completeness.complete, false, `#4144: malformed completeness ${String(malformed)} must fail closed`);
+  assert.equal(program.graphCompleteness.callsComplete, false, '#4144: malformed source completeness must not authorize calls');
+  assert.equal(program.graphCompleteness.refsComplete, false, '#4144: malformed source completeness must not authorize refs');
+  assert.equal(program.queryIncompleteReason, 'program-analysis-incomplete', '#4144: malformed source completeness must retain an incomplete query reason');
+}
+
+const explicitComplete = new ProgramIndex({
+  ...completenessScan,
+  completeness:{ complete:true, reasons:[] },
+}, null, null);
+assert.equal(explicitComplete.completeness.complete, true, '#4144: explicit boolean true remains complete');
+assert.equal(explicitComplete.graphCompleteness.callsComplete, true, '#4144: explicit true still authorizes uncapped calls');
+assert.equal(explicitComplete.graphCompleteness.refsComplete, true, '#4144: explicit true still authorizes uncapped refs');
+
+const explicitIncomplete = new ProgramIndex({
+  ...completenessScan,
+  completeness:{ complete:false, reasons:['fixture-incomplete'] },
+}, null, null);
+assert.equal(explicitIncomplete.completeness.complete, false, '#4144: explicit boolean false remains incomplete');
+assert.equal(explicitIncomplete.queryIncompleteReason, 'fixture-incomplete', '#4144: producer incomplete reason is preserved');
+
+const legacyCompletenessFallback = new ProgramIndex(completenessScan, null, null);
+assert.equal(legacyCompletenessFallback.completeness.complete, true, '#4144: omitted completeness metadata retains legacy uncapped fallback');
+
+const legacyCappedFallback = new ProgramIndex({ ...completenessScan, callsCapped:true }, null, null);
+assert.equal(legacyCappedFallback.completeness.complete, false, '#4144: omitted metadata still fails closed when the legacy source is capped');
+
+console.log('issue #2059/#3416/#3633/#4144/#4546/#4934 program merge/index regressions passed');

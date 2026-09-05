@@ -208,7 +208,7 @@ export class ProgramIndex {
     ])];
     this.completeness = {
       ...(suppliedCompleteness || {}),
-      complete: !this.unsupported && (suppliedCompleteness ? suppliedCompleteness.complete !== false : (!this.callsCapped && !this.refsCapped)),
+      complete: !this.unsupported && (suppliedCompleteness ? suppliedCompleteness.complete === true : (!this.callsCapped && !this.refsCapped)),
       reasons,
     };
     this.queryIncompleteReason = this.unsupported ? 'unsupported-program-analysis'
