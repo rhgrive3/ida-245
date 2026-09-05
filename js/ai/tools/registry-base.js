@@ -261,7 +261,7 @@ export function createHexToolRegistry(context = {}, options = {}) {
       const offset = pageOffset('get_runtime_observations', params, cursor);
       return runtimeObservations(context, { functionAddress, limit, offset, cursorFor: (next) => pageCursor('get_runtime_observations', params, next) });
     }, { verifier: true, cost: 'medium', scopeSupport: ['auto', 'runtime'], category: 'runtime', resultKind: 'runtime-observations', modelProjection: projectRuntime, deterministic: false });
-    register('verify_runtime_hypothesis', 'Run the configured deterministic runtime verifier for a hypothesis.', runtimeVerifySchema(), async ({ hypothesis, options: runtimeOptions }) => runtimeVerify(context, hypothesis, runtimeOptions), {
+    register('verify_runtime_hypothesis', 'Run the configured deterministic runtime verifier for a hypothesis.', runtimeVerifySchema(), async ({ hypothesis, options: runtimeOptions }, callOptions = {}) => runtimeVerify(context, hypothesis, { ...(runtimeOptions || {}), signal: callOptions.signal || null }), {
       verifier: true, cost: 'expensive', scopeSupport: ['auto', 'runtime'], category: 'verification', resultKind: 'runtime-verification', modelProjection: projectVerification, deterministic: false,
     });
   }
